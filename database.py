@@ -11,6 +11,8 @@ class UserLink(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False)
     link = Column(String, nullable=False)
+    min_price = Column(Integer, nullable=True)
+    max_price = Column(Integer, nullable=True)
 
 
 class TrackedProduct(Base):
@@ -27,9 +29,9 @@ Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 
 
-def add_link_to_db(user_id: int, link: str):
+def add_link_to_db(user_id: int, link: str, min_price: int = None, max_price: int = None):
     session = Session()
-    new_link = UserLink(user_id=user_id, link=link)
+    new_link = UserLink(user_id=user_id, link=link, min_price=min_price, max_price=max_price)
     session.add(new_link)
     session.commit()
     session.close()

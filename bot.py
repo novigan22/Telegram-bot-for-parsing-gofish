@@ -10,7 +10,8 @@ from database import add_link_to_db, get_user_links, delete_link_from_db
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = "YOUR_TOKEN_BOT"
+BOT_TOKEN = "8426215976:AAHI5KHNPOwpG8qgybdJaihFYFMvVlZP9JM"
+
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
@@ -19,6 +20,8 @@ router = Router()
 
 class AddLinkStates(StatesGroup):
     waiting_for_link = State()
+    waiting_for_min_price = State()
+    waiting_for_max_price = State()
 
 
 def get_main_menu():
@@ -42,7 +45,23 @@ def get_links_menu(user_id: int):
     links = get_user_links(user_id)
     buttons = []
     for link_obj in links:
-        display_text = link_obj.link[:30] + "..." if len(link_obj.link) > 30 else link_obj.link
+        display_text = link_obj.link[:30] + "..."
+        
+        if link_obj.min_price or link_obj.max_price:
+            price_suffix = ""
+            if link_obj.min_price and link_obj.max_price:
+                price_suffix = f" (¥{link_obj.min_price}-{link_obj.max_price})"
+            elif link_obj.min_price:
+                price_suffix = f" (от ¥{link_obj.min_price})"
+            elif link_obj.max_price:
+                price_suffix = f" (до ¥{link_obj.max_price})"
+            
+            display_text = link_obj.link[:20] + "..." + price_suffix
+        elif len(link_obj.link) > 30:
+            display_text = link_obj.link[:30] + "..."
+        else:
+            display_text = link_obj.link
+        
         buttons.append([InlineKeyboardButton(
             text=display_text, 
             callback_data=f"link_{link_obj.id}"
@@ -90,9 +109,90 @@ async def cancel_handler(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(AddLinkStates.waiting_for_link))
 async def receive_link(message: Message, state: FSMContext):
     link = message.text.strip()
-    add_link_to_db(message.from_user.id, link)
-    await message.answer("Ссылка успешно добавлена!✅")
+    await state.update_data(link=link)
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Пропустить", callback_data="skip_min_price")]
+    ])
+    
+    await message.answer(
+        "Укажи минимальную цену (в юанях) или нажми 'Пропустить':",
+        reply_markup=keyboard
+    )
+    await state.set_state(AddLinkStates.waiting_for_min_price)
+
+
+@router.callback_query(F.data == "skip_min_price", StateFilter(AddLinkStates.waiting_for_min_price))
+async def skip_min_price(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(min_price=None)
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Пропустить", callback_data="skip_max_price")]
+    ])
+    
+    await callback.message.edit_text(
+        "Укажи максимальную цену (в юанях) или нажми 'Пропустить':",
+        reply_markup=keyboard
+    )
+    await state.set_state(AddLinkStates.waiting_for_max_price)
+    await callback.answer()
+
+
+@router.message(StateFilter(AddLinkStates.waiting_for_min_price))
+async def receive_min_price(message: Message, state: FSMContext):
+    try:
+        min_price = int(message.text.strip())
+        await state.update_data(min_price=min_price)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Пропустить", callback_data="skip_max_price")]
+        ])
+        
+        await message.answer(
+            "Укажи максимальную цену (в юанях) или нажми 'Пропустить':",
+            reply_markup=keyboard
+        )
+        await state.set_state(AddLinkStates.waiting_for_max_price)
+    except ValueError:
+        await message.answer("Пожалуйста, введи число или нажми 'Пропустить'")
+
+
+@router.callback_query(F.data == "skip_max_price", StateFilter(AddLinkStates.waiting_for_max_price))
+async def skip_max_price(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    link = data.get('link')
+    min_price = data.get('min_price')
+    
+    add_link_to_db(callback.from_user.id, link, min_price, None)
+    
+    price_info = f"Минимальная цена: ¥{min_price}" if min_price else "Без ограничений по цене"
+    await callback.message.edit_text(f"Ссылка успешно добавлена!✅\n{price_info}")
     await state.clear()
+    await callback.answer()
+
+
+@router.message(StateFilter(AddLinkStates.waiting_for_max_price))
+async def receive_max_price(message: Message, state: FSMContext):
+    try:
+        max_price = int(message.text.strip())
+        data = await state.get_data()
+        link = data.get('link')
+        min_price = data.get('min_price')
+        
+        add_link_to_db(message.from_user.id, link, min_price, max_price)
+        
+        price_info = ""
+        if min_price and max_price:
+            price_info = f"Цена: ¥{min_price} - ¥{max_price}"
+        elif min_price:
+            price_info = f"Минимальная цена: ¥{min_price}"
+        elif max_price:
+            price_info = f"Максимальная цена: ¥{max_price}"
+        
+        await message.answer(f"Ссылка успешно добавлена!✅\n{price_info}")
+        await state.clear()
+    except ValueError:
+        await message.answer("Пожалуйста, введи число или нажми 'Пропустить'")
 
 
 @router.callback_query(F.data == "my_links")
