@@ -11,12 +11,13 @@ from database import get_user_links, is_product_tracked, add_tracked_product
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+BOT_TOKEN = "YOUR_TOKEN_BOT"
 bot = Bot(token=BOT_TOKEN)
 
 USER_ID = 123456789
 
 HEADLESS = False
+MAX_PAGES = 3
 
 
 def create_driver():
@@ -163,88 +164,139 @@ def parse_gofish_page(driver, url: str, min_price: int = None, max_price: int = 
         
         time.sleep(3)
         
-        products = []
-        items = driver.find_elements(By.CLASS_NAME, "feeds-item-wrap--rGdH_KoF")
+        all_products = []
+        seen_ids = set()
         
-        logger.info(f"Найдено элементов товаров: {len(items)}")
-        
-        logger.info("Дополнительный скроллинг для загрузки всех изображений...")
-        for i in range(len(items)):
-            try:
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", items[i])
-                time.sleep(0.2)
-            except:
-                pass
-        
-        time.sleep(2)
-        
-        items = driver.find_elements(By.CLASS_NAME, "feeds-item-wrap--rGdH_KoF")
-        
-        for item in items:
-            try:
-                link = item.get_attribute('href')
-                if not link:
-                    continue
-                
-                product_id = None
-                if 'id=' in link:
-                    product_id = link.split('id=')[1].split('&')[0]
-                
-                if not product_id:
-                    continue
-                
+        for page in range(MAX_PAGES):
+            logger.info(f"Обработка страницы {page + 1}/{MAX_PAGES}...")
+            
+            if page > 0:
+                time.sleep(2)
+            
+            logger.info("Скроллинг для загрузки товаров на текущей странице...")
+            for i in range(3):
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(1)
+            
+            driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(2)
+            
+            items = driver.find_elements(By.CLASS_NAME, "feeds-item-wrap--rGdH_KoF")
+            logger.info(f"Найдено элементов товаров: {len(items)}")
+            
+            if len(items) == 0:
+                logger.info("Товары не найдены, прекращаем")
+                break
+            
+            logger.info("Дополнительный скроллинг для загрузки всех изображений...")
+            for i in range(len(items)):
                 try:
-                    title_elem = item.find_element(By.CLASS_NAME, "main-title--sMrtWSJa")
-                    title = title_elem.text.strip()
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", items[i])
+                    time.sleep(0.1)
                 except:
-                    title = ''
-                
+                    pass
+            
+            time.sleep(2)
+            
+            items = driver.find_elements(By.CLASS_NAME, "feeds-item-wrap--rGdH_KoF")
+            
+            new_products_count = 0
+            
+            for item in items:
                 try:
-                    price_elem = item.find_element(By.CLASS_NAME, "number--NKh1vXWM")
-                    price = price_elem.text.strip()
-                except:
-                    price = ''
-                
-                try:
-                    img_elem = item.find_element(By.CLASS_NAME, "feeds-image--TDRC4fV1")
-                    image_url = img_elem.get_attribute('src')
+                    link = item.get_attribute('href')
+                    if not link:
+                        continue
                     
-                    if not image_url or image_url == '' or 'data:image' in image_url:
-                        image_url = img_elem.get_attribute('data-src')
+                    product_id = None
+                    if 'id=' in link:
+                        product_id = link.split('id=')[1].split('&')[0]
                     
-                    if not image_url or image_url == '' or 'data:image' in image_url:
-                        image_url = img_elem.get_attribute('data-lazy-src')
+                    if not product_id or product_id in seen_ids:
+                        continue
                     
-                    if image_url and not image_url.startswith('http'):
-                        image_url = 'https:' + image_url
+                    seen_ids.add(product_id)
                     
-                    if not image_url or 'data:image' in image_url or len(image_url) < 20:
-                        logger.debug(f"Некорректное изображение для товара {product_id}")
+                    try:
+                        title_elem = item.find_element(By.CLASS_NAME, "main-title--sMrtWSJa")
+                        title = title_elem.text.strip()
+                    except:
+                        title = ''
+                    
+                    try:
+                        price_elem = item.find_element(By.CLASS_NAME, "number--NKh1vXWM")
+                        price = price_elem.text.strip()
+                    except:
+                        price = ''
+                    
+                    try:
+                        img_elem = item.find_element(By.CLASS_NAME, "feeds-image--TDRC4fV1")
+                        image_url = img_elem.get_attribute('src')
+                        
+                        if not image_url or image_url == '' or 'data:image' in image_url:
+                            image_url = img_elem.get_attribute('data-src')
+                        
+                        if not image_url or image_url == '' or 'data:image' in image_url:
+                            image_url = img_elem.get_attribute('data-lazy-src')
+                        
+                        if image_url and not image_url.startswith('http'):
+                            image_url = 'https:' + image_url
+                        
+                        if not image_url or 'data:image' in image_url or len(image_url) < 20:
+                            logger.debug(f"Некорректное изображение для товара {product_id}")
+                            image_url = ''
+                    except:
                         image_url = ''
-                except:
-                    image_url = ''
-                
-                if not title or not price or title == 'Без названия':
-                    logger.debug(f"Пропущен товар без данных: ID={product_id}")
+                    
+                    if not title or not price or title == 'Без названия':
+                        logger.debug(f"Пропущен товар без данных: ID={product_id}")
+                        continue
+                    
+                    if not image_url:
+                        logger.debug(f"Пропущен товар без изображения: ID={product_id}, название={title[:30]}")
+                        continue
+                    
+                    all_products.append({
+                        'id': product_id,
+                        'title': title,
+                        'price': price,
+                        'link': link,
+                        'image': image_url
+                    })
+                    
+                    new_products_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при парсинге товара: {e}")
                     continue
-                
-                if not image_url:
-                    logger.debug(f"Пропущен товар без изображения: ID={product_id}, название={title[:30]}")
-                    continue
-                
-                products.append({
-                    'id': product_id,
-                    'title': title,
-                    'price': price,
-                    'link': link,
-                    'image': image_url
-                })
-                
-            except Exception as e:
-                logger.error(f"Ошибка при парсинге товара: {e}")
-                continue
+            
+            logger.info(f"Новых товаров на странице {page + 1}: {new_products_count}")
+            
+            if page < MAX_PAGES - 1:
+                try:
+                    logger.info(f"Переход на страницу {page + 2}...")
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(2)
+                    
+                    next_button = driver.find_element(By.CLASS_NAME, "search-pagination-arrow-right--CKU78u4z")
+                    parent_button = next_button.find_element(By.XPATH, "..")
+                    
+                    if parent_button.get_attribute("disabled"):
+                        logger.info("Кнопка 'Следующая страница' неактивна, достигнута последняя страница")
+                        break
+                    
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", parent_button)
+                    time.sleep(1)
+                    driver.execute_script("arguments[0].click();", parent_button)
+                    logger.info(f"Нажата кнопка перехода на страницу {page + 2}")
+                    time.sleep(4)
+                    
+                except Exception as e:
+                    logger.error(f"Не удалось перейти на следующую страницу: {e}")
+                    break
         
-        return products
+        logger.info(f"Всего уникальных товаров найдено: {len(all_products)}")
+        return all_products
     
     except Exception as e:
         logger.error(f"Ошибка при парсинге страницы {url}: {e}")
